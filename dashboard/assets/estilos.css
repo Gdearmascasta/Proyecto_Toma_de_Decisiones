@@ -492,3 +492,20 @@ html, body {
 .fondo.claro .boton-tema .icono-sol { display: none; }
 .fondo.claro .boton-tema .icono-luna { display: inline; }
 .fondo.claro ::-webkit-scrollbar-thumb { background: rgba(16, 35, 63, 0.2); }
+
+/* Antigüedad de los datos, descarga del escenario e instrumentos */
+.sello .antiguedad { margin-top: 4px; font-size: 11px; color: var(--tenue); }
+.sello.viejo { border-color: var(--ambar); }
+.sello.viejo .antiguedad { color: var(--ambar); font-weight: 600; }
+.boton-descarga {
+  width: 100%; padding: 10px 14px; border-radius: 12px !important;
+  color: var(--texto); font-family: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.boton-descarga:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25); }
+.boton-descarga:focus-visible { outline: 2px solid var(--turquesa); outline-offset: 2px; }
+.nota { margin: 0 0 8px; font-size: 12.5px; line-height: 1.5; color: var(--tenue); }
+.resultados .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 700px) {
+  .resultados .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

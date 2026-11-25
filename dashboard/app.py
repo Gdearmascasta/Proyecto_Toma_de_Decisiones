@@ -8,8 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, dcc, html
 
-from calculos import (cobertura_optima, cop, curva_coberturas, evaluar_estrategia, millones, pct,
-                      precio_forward, tornado, trm_simulada)
+from calculos import (cobertura_optima, comparar_instrumentos, cop, curva_coberturas, evaluar_estrategia, millones,
+                      pct, precio_forward, tornado, trm_simulada, vol_simulada)
 
 # Carga de datos
 DATOS = Path(__file__).resolve().parent / "datos"
@@ -31,6 +31,7 @@ DERIVAS = {
     "historica": M["deriva_historica"],
     "paridad": np.log((1 + M["tasa_cop"]) / (1 + M["tasa_usd"])) / M["obs_anuales"],
 }
+DIAS_DATOS_VIEJOS = 14
 ANIO_MIN, ANIO_MAX = serie.index.year.min(), serie.index.year.max()
 MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 
@@ -109,7 +110,8 @@ AYUDAS = {
     "curva": "Para cada porcentaje cubierto se ven el costo esperado, el percentil 95 y la franja entre los percentiles 5 y 95. El punto marca la cobertura más barata que cumple la tolerancia de riesgo.",
     "tornado": "Cada barra muestra cuánto cambia la utilidad bruta al mover una sola variable entre su valor bajo y su valor alto, con las demás fijas. El rojo es el escenario desfavorable y el turquesa el favorable. Las barras más largas, arriba, son las que más pesan en el resultado.",
     "caja_costos": "Cada caja resume el costo simulado de la compra con un porcentaje cubierto distinto. A medida que se cubre más, la caja se encoge y se acerca al precio del forward. La línea amarilla es el presupuesto.",
-    "backtest": "Cada barra es un mes desde 2015. En verde, cubrir con forward habría salido más barato que pagar a la TRM del vencimiento, y en rojo habría salido más caro. Al pasar el cursor se ven la TRM inicial, el forward y la TRM final.",
+    "backtest": "Cada barra es un mes desde 2015. En verde, cubrir con forward habría salido más barato que pagar a la TRM del vencimiento, y en rojo habría salido más caro. Con la estrategia escalonada el pago se cubre en tres tramos iguales a lo largo del plazo. Al pasar el cursor se ven la TRM inicial, el forward y la TRM final.",
+    "instrumentos": "Compara no cubrir con cubrir el porcentaje elegido mediante un forward, una call o un collar de costo cero, sobre los mismos 10.000 escenarios. El P95 es el costo que solo se supera en el 5 % de los escenarios y el CVaR es el promedio de ese peor 5 %. La call pone un techo a la tasa y conserva la ganancia si el dólar baja, a cambio de una prima. El collar fija la tasa entre un piso y un techo sin pagar prima.",
 }
 
 
@@ -129,22 +131,33 @@ app = Dash(__name__, title="Cobertura del riesgo cambiario", update_title=None,
            external_stylesheets=["https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"])
 server = app.server
 
-cabecera = html.Header(className="cabecera", children=[
-    html.Div(children=[
-        html.Span("USD / COP · Importadora de Cartagena", className="sobretitulo"),
-        html.H1("Cobertura del riesgo cambiario en importaciones"),
-        html.P("Evaluación de contratos forward a 3 y 6 meses para una importadora de Cartagena."),
-    ]),
-    html.Div(className="cabecera-derecha", children=[
-        html.Button(id="boton-tema", className="boton-tema vidrio", n_clicks=0, title="Cambiar entre modo claro y oscuro",
-                    children=[html.Span("☀", className="icono-sol"), html.Span("☾", className="icono-luna"),
-                              html.Span(id="texto-tema", children="Modo claro")]),
-        html.Div(className="sello vidrio", children=[
-            html.Span("Datos al", className="kpi-titulo"), html.Strong(fecha_texto),
-            html.Span(f"TRM {cop(SPOT, 2)}", className="kpi-detalle"),
+
+
+def cabecera():
+    """Encabezado con la antigüedad de los datos calculada en cada carga de la página."""
+    dias = (pd.Timestamp.today().normalize() - pd.Timestamp(M["fecha_decision"])).days
+    viejos = dias > DIAS_DATOS_VIEJOS
+    antiguedad = "Actualizados hoy" if dias <= 0 else f"Hace {dias} día" + ("s" if dias != 1 else "")
+    return html.Header(className="cabecera", children=[
+        html.Div(children=[
+            html.Span("USD / COP · Importadora de Cartagena", className="sobretitulo"),
+            html.H1("Cobertura del riesgo cambiario en importaciones"),
+            html.P("Evaluación de contratos forward a 3 y 6 meses para una importadora de Cartagena."),
         ]),
-    ]),
-])
+        html.Div(className="cabecera-derecha", children=[
+            html.Button(id="boton-tema", className="boton-tema vidrio", n_clicks=0, title="Cambiar entre modo claro y oscuro",
+                        children=[html.Span("☀", className="icono-sol"), html.Span("☾", className="icono-luna"),
+                                  html.Span(id="texto-tema", children="Modo claro")]),
+            html.Div(className="sello vidrio" + (" viejo" if viejos else ""), title=(
+                "Los datos tienen más de dos semanas: conviene volver a descargarlos y ejecutar el notebook" if viejos else None),
+                children=[
+                    html.Span("Datos al", className="kpi-titulo"), html.Strong(fecha_texto),
+                    html.Span(f"TRM {cop(SPOT, 2)}", className="kpi-detalle"),
+                    html.Span(antiguedad + (" · desactualizados" if viejos else ""), className="antiguedad"),
+                ]),
+        ]),
+    ])
+
 
 contexto_caja = html.Div(className="vidrio contexto", children=[
     html.Div(className="contexto-icono", children="i"),
@@ -244,6 +257,12 @@ controles = html.Div(className="vidrio controles", children=[
                                                    marks={1: "1", 5: "5", 10: "10", 20: "20"}, allow_direct_input=False),
             "Probabilidad máxima aceptada de quedar bajo el margen mínimo"),
     control("Qué esperar del dólar", dcc.RadioItems(id="deriva", options=opciones_deriva, value="aleatorio", className="pastillas apiladas")),
+    control("Strike de la call (% sobre el forward)", dcc.Slider(id="holgura", min=0, max=10, step=0.5,
+                                                                value=P["opciones"]["holgura_call"] * 100,
+                                                                marks={0: "0", 3: "3", 5: "5", 10: "10"}, allow_direct_input=False),
+            "También es el techo del collar de costo cero"),
+    html.Button("Descargar escenario (CSV)", id="boton-descarga", className="boton-descarga vidrio", n_clicks=0),
+    dcc.Download(id="descarga"),
 ])
 
 pestana_decision = html.Div(className="decision", children=[
@@ -263,6 +282,10 @@ pestana_decision = html.Div(className="decision", children=[
             panel("Costo por nivel de cobertura", "10.000 escenarios por cada porcentaje cubierto",
                   dcc.Graph(id="g-caja-costos", config={"displayModeBar": False}), ayuda=AYUDAS["caja_costos"]),
         ]),
+        panel("Forward, call y collar de costo cero", "Costo esperado, P95 y CVaR 95 % con el porcentaje cubierto elegido",
+              html.Div(children=[html.P(id="texto-instrumentos", className="nota"),
+                                 dcc.Graph(id="g-instrumentos", config={"displayModeBar": False})]),
+              ayuda=AYUDAS["instrumentos"]),
     ]),
 ])
 
@@ -271,6 +294,10 @@ pestana_backtest = html.Div(children=[
         html.Span("Plazo", className="filtro-etiqueta"),
         dcc.RadioItems(id="plazo-bt", options=[{"label": "3 meses", "value": 3}, {"label": "6 meses", "value": 6}],
                        value=6, className="pastillas", inline=True),
+        html.Span("Estrategia", className="filtro-etiqueta"),
+        dcc.RadioItems(id="estrategia-bt", options=[{"label": "Todo al inicio", "value": "todo"},
+                                                    {"label": "Escalonada en 3 tramos", "value": "escalonada"}],
+                       value="todo", className="pastillas", inline=True),
     ]),
     html.Div(id="kpis-backtest", className="kpis"),
     panel("Backtest de la cobertura, 2015-2026",
@@ -278,30 +305,37 @@ pestana_backtest = html.Div(children=[
           dcc.Graph(id="g-backtest", config={"displayModeBar": False}), ayuda=AYUDAS["backtest"]),
 ])
 
-app.layout = html.Div(id="raiz", className="fondo", children=[
-    dcc.Store(id="tema", storage_type="local", data="oscuro"),
-    html.Div(className="mancha m1"), html.Div(className="mancha m2"), html.Div(className="mancha m3"),
-    html.Main(className="contenedor", children=[
-        cabecera,
-        contexto_caja,
-        kpis_contexto,
-        filtro_fechas,
-        dcc.Tabs(id="pestanas", value="decision", className="pestanas", children=[
-            dcc.Tab(label="1 · Contexto", value="contexto", className="pestana", selected_className="pestana-activa",
-                    children=[pestana_contexto]),
-            dcc.Tab(label="2 · Riesgo", value="riesgo", className="pestana", selected_className="pestana-activa",
-                    children=[pestana_riesgo]),
-            dcc.Tab(label="3 · Decisión", value="decision", className="pestana", selected_className="pestana-activa",
-                    children=[pestana_decision]),
-            dcc.Tab(label="4 · Backtest", value="backtest", className="pestana", selected_className="pestana-activa",
-                    children=[pestana_backtest]),
+
+
+def construir_layout():
+    """Página completa; Dash la reconstruye en cada carga para que la antigüedad de los datos esté al día."""
+    return html.Div(id="raiz", className="fondo", children=[
+        dcc.Store(id="tema", storage_type="local", data="oscuro"),
+        html.Div(className="mancha m1"), html.Div(className="mancha m2"), html.Div(className="mancha m3"),
+        html.Main(className="contenedor", children=[
+            cabecera(),
+            contexto_caja,
+            kpis_contexto,
+            filtro_fechas,
+            dcc.Tabs(id="pestanas", value="decision", className="pestanas", children=[
+                dcc.Tab(label="1 · Contexto", value="contexto", className="pestana", selected_className="pestana-activa",
+                        children=[pestana_contexto]),
+                dcc.Tab(label="2 · Riesgo", value="riesgo", className="pestana", selected_className="pestana-activa",
+                        children=[pestana_riesgo]),
+                dcc.Tab(label="3 · Decisión", value="decision", className="pestana", selected_className="pestana-activa",
+                        children=[pestana_decision]),
+                dcc.Tab(label="4 · Backtest", value="backtest", className="pestana", selected_className="pestana-activa",
+                        children=[pestana_backtest]),
+            ]),
+            html.Footer(className="pie", children=[
+                html.P("Fuentes: Superintendencia Financiera (TRM, datos.gov.co), Yahoo Finance (Brent, índice dólar, S&P 500), "
+                       "Banco de Pagos Internacionales (tasas de política e inflación). Simulación GJR-GARCH con 10.000 escenarios y semilla fija."),
+            ]),
         ]),
-        html.Footer(className="pie", children=[
-            html.P("Fuentes: Superintendencia Financiera (TRM, datos.gov.co), Yahoo Finance (Brent, índice dólar, S&P 500), "
-                   "Banco de Pagos Internacionales (tasas de política e inflación). Simulación GJR-GARCH con 10.000 escenarios y semilla fija."),
-        ]),
-    ]),
-])
+    ])
+
+
+app.layout = construir_layout
 
 
 @app.callback(Output("tema", "data"), Input("boton-tema", "n_clicks"), State("tema", "data"), prevent_initial_call=True)
@@ -447,42 +481,66 @@ def actualizar_riesgo(rango, tema="oscuro"):
             estilo(fig5, 330, leyenda=False, tema=tema), estilo(fig6, 330, leyenda=False, tema=tema), estilo(fig7, 320, leyenda=False, tema=tema))
 
 
-@app.callback(
-    Output("kpis-decision", "children"), Output("recomendacion", "children"), Output("g-costos", "figure"),
-    Output("g-curva", "figure"), Output("g-tornado", "figure"), Output("g-caja-costos", "figure"),
-    Input("plazo", "value"), Input("cobertura", "value"), Input("monto", "value"), Input("presupuesto", "value"),
-    Input("tasa-cop", "value"), Input("tasa-usd", "value"), Input("recargo", "value"), Input("margen-obj", "value"),
-    Input("margen-min", "value"), Input("tolerancia", "value"), Input("deriva", "value"), Input("tema", "data"),
-)
-def actualizar_decision(plazo, cobertura, monto, presupuesto, tasa_cop, tasa_usd, recargo, margen_obj, margen_min, tolerancia, deriva,
-                        tema="oscuro"):
-    """Simulación, métricas y recomendación para los supuestos elegidos."""
-    AZUL, TURQUESA, AMBAR, ROJO, LILA, TEXTO, TENUE, REJILLA, LINEA = colores(tema)
+ENTRADAS_DECISION = ["plazo", "cobertura", "monto", "presupuesto", "tasa-cop", "tasa-usd", "recargo", "margen-obj",
+                     "margen-min", "tolerancia", "deriva", "holgura"]
+
+
+def escenario(plazo, cobertura, monto, presupuesto, tasa_cop, tasa_usd, recargo, margen_obj, margen_min, tolerancia, deriva,
+              holgura):
+    """Supuestos normalizados y cálculos de la pestaña de decisión, compartidos por las gráficas y la descarga."""
     presupuesto = presupuesto or M["presupuesto"]
     tasa_cop = (tasa_cop if tasa_cop is not None else M["tasa_cop"] * 100) / 100
     tasa_usd = (tasa_usd if tasa_usd is not None else M["tasa_usd"] * 100) / 100
     margen_obj = min(max((margen_obj or 25) / 100, 0.01), 0.9)
     margen_min = min(max((margen_min or 15) / 100, 0.0), margen_obj)
     h = cobertura / 100
-
     forward = precio_forward(SPOT, tasa_cop, tasa_usd, plazo, recargo / 100)
     trm_final = trm_simulada(RETORNOS[plazo], SPOT, DERIVAS[deriva], PASOS[plazo])
     argumentos = dict(monto_usd=monto, presupuesto=presupuesto, margen_objetivo=margen_obj, margen_minimo=margen_min)
-    elegida = evaluar_estrategia(trm_final, forward, h, **argumentos)
-    sin_cubrir = evaluar_estrategia(trm_final, forward, 0.0, **argumentos)
     curva = curva_coberturas(trm_final, forward, **argumentos)
-    optima = cobertura_optima(curva, tolerancia / 100)
+    return dict(
+        plazo=plazo, h=h, monto=monto, presupuesto=presupuesto, tasa_cop=tasa_cop, tasa_usd=tasa_usd, recargo=recargo / 100,
+        margen_obj=margen_obj, margen_min=margen_min, tolerancia=tolerancia / 100, deriva=deriva, holgura=holgura / 100,
+        forward=forward, trm_final=trm_final, vol=vol_simulada(RETORNOS[plazo], plazo),
+        elegida=evaluar_estrategia(trm_final, forward, h, **argumentos),
+        sin_cubrir=evaluar_estrategia(trm_final, forward, 0.0, **argumentos),
+        curva=curva, optima=cobertura_optima(curva, tolerancia / 100),
+        instrumentos=comparar_instrumentos(trm_final, forward, vol_simulada(RETORNOS[plazo], plazo), plazo, h, holgura / 100,
+                                           **argumentos),
+    )
+
+
+@app.callback(
+    Output("kpis-decision", "children"), Output("recomendacion", "children"), Output("g-costos", "figure"),
+    Output("g-curva", "figure"), Output("g-tornado", "figure"), Output("g-caja-costos", "figure"),
+    Output("g-instrumentos", "figure"), Output("texto-instrumentos", "children"),
+    *[Input(nombre, "value") for nombre in ENTRADAS_DECISION], Input("tema", "data"),
+)
+def actualizar_decision(plazo, cobertura, monto, presupuesto, tasa_cop, tasa_usd, recargo, margen_obj, margen_min, tolerancia, deriva,
+                        holgura, tema="oscuro"):
+    """Simulación, métricas y recomendación para los supuestos elegidos."""
+    AZUL, TURQUESA, AMBAR, ROJO, LILA, TEXTO, TENUE, REJILLA, LINEA = colores(tema)
+    e = escenario(plazo, cobertura, monto, presupuesto, tasa_cop, tasa_usd, recargo, margen_obj, margen_min, tolerancia, deriva,
+                  holgura)
+    presupuesto, tasa_cop, tasa_usd, margen_obj, margen_min = (e["presupuesto"], e["tasa_cop"], e["tasa_usd"], e["margen_obj"],
+                                                               e["margen_min"])
+    h, forward, trm_final, curva, optima = e["h"], e["forward"], e["trm_final"], e["curva"], e["optima"]
+    elegida, sin_cubrir, instrumentos = e["elegida"], e["sin_cubrir"], e["instrumentos"]
 
     ahorro = sin_cubrir["costo_esperado"] - elegida["costo_esperado"]
+    call = instrumentos.set_index("instrumento").loc["Call"]
     kpis = [
         tarjeta(f"Forward {plazo} meses", cop(forward, 2), f"{pct(forward / SPOT - 1)} sobre la TRM"),
         tarjeta("Costo esperado", millones(elegida["costo_esperado"]), f"Sin cubrir {millones(sin_cubrir['costo_esperado'])}"),
-        tarjeta("Costo P95 (VaR)", millones(elegida["costo_p95"]), f"Sin cubrir {millones(sin_cubrir['costo_p95'])}", "alerta"),
+        tarjeta("Costo P95 (CFaR)", millones(elegida["costo_p95"]), f"Sin cubrir {millones(sin_cubrir['costo_p95'])}", "alerta"),
+        tarjeta("CVaR 95 %", millones(elegida["cvar95"]), f"Promedio del peor 5 %; sin cubrir {millones(sin_cubrir['cvar95'])}",
+                "alerta"),
         tarjeta("P(superar presupuesto)", pct(elegida["prob_superar_presupuesto"]), f"Sin cubrir {pct(sin_cubrir['prob_superar_presupuesto'])}"),
         tarjeta("P(margen < mínimo)", pct(elegida["prob_margen_bajo"]), f"Tolerancia {tolerancia:.0f} %",
                 "baja" if elegida["prob_margen_bajo"] <= tolerancia / 100 else "sube"),
         tarjeta("Ahorro esperado vs no cubrir", millones(ahorro), "Negativo = prima pagada por cubrir",
                 "baja" if ahorro >= 0 else "neutro"),
+        tarjeta("Prima de la call", cop(call["prima"], 1), f"Por dólar, strike {cop(call['strike_call'], 0)}"),
     ]
 
     opt_h = optima["cobertura"]
@@ -561,28 +619,73 @@ def actualizar_decision(plazo, cobertura, monto, presupuesto, tasa_cop, tasa_usd
     fig4.update_yaxes(title="Costo (millones de COP)", tickformat=",.0f")
     fig4.update_xaxes(title="Porcentaje cubierto")
     fig4.update_layout(hovermode="closest")
-    return kpis, texto, estilo(fig, 330, tema=tema), estilo(fig2, 330, tema=tema), estilo(fig3, 330, leyenda=False, tema=tema), estilo(fig4, 330, leyenda=False, tema=tema)
+
+    fig5 = go.Figure()
+    for metrica, nombre, color in (("costo_esperado", "Costo esperado", AZUL), ("costo_p95", "P95 (CFaR)", AMBAR),
+                                   ("cvar95", "CVaR 95 %", ROJO)):
+        fig5.add_trace(go.Scatter(x=instrumentos["instrumento"], y=instrumentos[metrica] / 1e6, name=nombre, mode="markers",
+                                  marker=dict(color=color, size=14, line=dict(color=TEXTO, width=1)),
+                                  hovertemplate="%{y:,.1f} M<extra>" + nombre + "</extra>"))
+    fig5.add_hline(y=monto * presupuesto / 1e6, line=dict(color=TURQUESA, width=1.5, dash="dash"),
+                   annotation_text="Presupuesto", annotation_font_color=TURQUESA, annotation_position="top left")
+    fig5.update_yaxes(title="Millones de COP", tickformat=",.0f")
+    fig5.update_layout(hovermode="x unified")
+    collar = instrumentos.set_index("instrumento").loc["Collar"]
+    texto_instrumentos = (
+        f"Cubriendo el {cobertura} % a {plazo} meses con volatilidad simulada de {pct(e['vol'])}: la call fija un techo de "
+        f"{cop(call['strike_call'])} por {cop(call['prima'], 1)} de prima por dólar, y el collar deja la tasa entre "
+        f"{cop(collar['strike_put'])} y {cop(collar['strike_call'])} sin prima. Primas teóricas sin el diferencial del banco."
+    )
+    return (kpis, texto, estilo(fig, 330, tema=tema), estilo(fig2, 330, tema=tema), estilo(fig3, 330, leyenda=False, tema=tema),
+            estilo(fig4, 330, leyenda=False, tema=tema), estilo(fig5, 340, tema=tema), texto_instrumentos)
 
 
-@app.callback(Output("kpis-backtest", "children"), Output("g-backtest", "figure"), Input("plazo-bt", "value"), Input("tema", "data"))
-def actualizar_backtest(plazo, tema="oscuro"):
-    """Resultado histórico de cubrir cada mes desde 2015."""
+@app.callback(Output("descarga", "data"), Input("boton-descarga", "n_clicks"),
+              *[State(nombre, "value") for nombre in ENTRADAS_DECISION], prevent_initial_call=True)
+def descargar_escenario(clics, *valores):
+    """CSV con los supuestos elegidos, la curva por nivel de cobertura y la comparación de instrumentos."""
+    e = escenario(*valores)
+    supuestos = pd.DataFrame([
+        ("Fecha de los datos", M["fecha_decision"]), ("TRM vigente", SPOT), ("Plazo (meses)", e["plazo"]),
+        ("Porcentaje cubierto", e["h"]), ("Monto (USD)", e["monto"]), ("TRM presupuestada", e["presupuesto"]),
+        ("Tasa COP", e["tasa_cop"]), ("Tasa USD", e["tasa_usd"]), ("Recargo del banco", e["recargo"]),
+        ("Margen objetivo", e["margen_obj"]), ("Margen mínimo", e["margen_min"]), ("Tolerancia al riesgo", e["tolerancia"]),
+        ("Deriva supuesta", e["deriva"]), ("Strike de la call sobre el forward", e["holgura"]), ("Forward", e["forward"]),
+        ("Cobertura sugerida", e["optima"]["cobertura"]),
+    ], columns=["supuesto", "valor"])
+    supuestos["valor"] = [str(v).replace(".", ",") if isinstance(v, (int, float)) else v for v in supuestos["valor"]]
+    bloques = [("Supuestos", supuestos), ("Métricas por nivel de cobertura con forward", e["curva"]),
+               ("Comparación de instrumentos", e["instrumentos"])]
+    texto = "\n".join(f"{titulo}\n{tabla.to_csv(sep=';', decimal=',', index=False)}" for titulo, tabla in bloques)
+    nombre = f"escenario_cobertura_{e['plazo']}m_{round(e['h'] * 100)}pct.csv"
+    return dcc.send_string("﻿" + texto, nombre)
+
+
+@app.callback(Output("kpis-backtest", "children"), Output("g-backtest", "figure"), Input("plazo-bt", "value"),
+              Input("estrategia-bt", "value"), Input("tema", "data"))
+def actualizar_backtest(plazo, estrategia="todo", tema="oscuro"):
+    """Resultado histórico de cubrir cada mes desde 2015, todo al inicio o en tres tramos."""
     AZUL, TURQUESA, AMBAR, ROJO, LILA, TEXTO, TENUE, REJILLA, LINEA = colores(tema)
     d = historico[historico["plazo"] == plazo]
-    a = d["ahorro_cubrir_pct"]
+    escalonada = estrategia == "escalonada"
+    precio = d["forward_escalonado"] if escalonada else d["forward"]
+    a = d["ahorro_escalonado_pct"] if escalonada else d["ahorro_cubrir_pct"]
     var_sin = (d["trm_final"] / d["trm_inicial"] - 1).std()
-    var_con = (d["forward"] / d["trm_inicial"] - 1).std()
+    var_con = (precio / d["trm_inicial"] - 1).std()
     kpis = [
         tarjeta("Meses evaluados", f"{len(d)}", f"{d['fecha'].min():%m/%Y} a {d['fecha'].max():%m/%Y}"),
         tarjeta("Cubrir salió más barato", pct((a > 0).mean()), "Proporción de meses", "baja"),
         tarjeta("Costo medio de cubrir", pct(-a.mean(), 2), "Por dólar, sobre la TRM inicial"),
-        tarjeta("Peor caso sin cubrir", pct(a.max()), "Sobrecosto frente al forward", "alerta"),
+        tarjeta("Peor caso sin cubrir", pct(a.max()), "Sobrecosto frente a la cobertura", "alerta"),
         tarjeta("Dispersión del costo", f"{pct(var_sin)} → {pct(var_con)}", "Sin cubrir → cubriendo"),
     ]
+    if escalonada:
+        mejor = (d["ahorro_escalonado_pct"] > d["ahorro_cubrir_pct"]).mean()
+        kpis.append(tarjeta("Escalonada vs todo al inicio", pct(mejor), "Meses en que los tramos salieron más baratos", "neutro"))
     fig = go.Figure(go.Bar(x=d["fecha"], y=a, marker=dict(color=np.where(a > 0, TURQUESA, ROJO)),
-                           customdata=np.stack([d["trm_inicial"], d["forward"], d["trm_final"]], axis=1),
+                           customdata=np.stack([d["trm_inicial"], precio, d["trm_final"]], axis=1),
                            hovertemplate="%{x|%m/%Y}<br>Ahorro %{y:.1%}<br>TRM inicial %{customdata[0]:,.0f}"
-                                         "<br>Forward %{customdata[1]:,.0f}<br>TRM final %{customdata[2]:,.0f}<extra></extra>"))
+                                         "<br>Precio cubierto %{customdata[1]:,.0f}<br>TRM final %{customdata[2]:,.0f}<extra></extra>"))
     fig.update_yaxes(tickformat=".0%")
     fig.update_layout(hovermode="closest")
     return kpis, estilo(fig, 380, leyenda=False, tema=tema)
