@@ -71,3 +71,13 @@ El tablero muestra junto a la fecha de los datos cuántos días tienen, y la mar
 2. En connect.posit.cloud elegir **Publish → Dash**, seleccionar el repositorio y la rama.
 3. Archivo principal `app.py` (en la raíz, carga el tablero de `dashboard/`). Posit instala las librerías de `requirements.txt`.
 4. Publicar y compartir el enlace.
+
+## Despliegue en Vercel (alternativa)
+
+`vercel_entrada.py` expone la aplicación Flask del tablero como `app`, y `pyproject.toml` le indica a Vercel que use ese archivo (`tool.vercel.entrypoint`). `.vercelignore` deja fuera el notebook, el documento, la presentación y los datos crudos, que el tablero no necesita.
+
+1. En vercel.com elegir **Add New → Project** e importar el repositorio de GitHub.
+2. Dejar *Framework Preset* en **Other** o como lo detecte Vercel (Python), sin comando de build.
+3. Publicar. Vercel instala las dependencias de `pyproject.toml`, que son las mismas de `requirements.txt`.
+
+Si se cambia una dependencia, hay que actualizarla en los dos archivos. La primera visita después de un rato sin uso tarda unos segundos mientras la función arranca.

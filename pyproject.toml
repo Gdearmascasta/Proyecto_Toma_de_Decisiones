@@ -1,0 +1,15 @@
+# Solo lo usa Vercel. Las dependencias son las mismas de requirements.txt (Posit Connect Cloud).
+[project]
+name = "cobertura-usd-cop"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "dash==4.5.1",
+    "plotly==7.1.0",
+    "pandas==3.1.1",
+    "numpy>=2.0,<2.5",
+    "gunicorn==27.0.1",
+]
+
+[tool.vercel]
+entrypoint = "vercel_entrada:app"
